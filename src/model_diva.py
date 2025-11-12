@@ -4,27 +4,24 @@ from torch.nn import functional as F
 import torch.distributions as dist
 
 
-### Follows model as seen in LEARNING ROBUST REPRESENTATIONS BY PROJECTING SUPERFICIAL STATISTICS OUT
-'''
-SGVA-Wx model
-'''
+### Este modelo es implementado basándose en el artículo: "PROJECTING SUPERFICIAL STATISTICS OUT"
 
 
-# Decoders
+#------------------------------ Encoders  ------------------------------#
+
+# Encoder para la señal de entrada
 class px(nn.Module):
     '''
-    Decoder of SGVA-Wx
     params:
-        zd_dim: size of latent space of subject label
-        zy_dim: size of latent space of gesture label
+        zd_dim: tamaño del espacio latente de la etiqueta de sujeto
+        zx_dim: tamaño del espacio latente de la muestra
+        zy_dim: tamaño del espacio latente de la etiqueta de gesto
     return:
-        reconstruction of signal
+        Reconstrucción de la señal de entrada
     '''
-    def __init__(self, d_dim, x_dim, y_dim, zd_dim,zy_dim):
+    def __init__(self, d_dim, x_dim, y_dim, zd_dim, zx_dim, zy_dim):
         super(px, self).__init__()
-
-        self.fc1 = nn.Sequential(nn.Linear(zd_dim +zy_dim, 240, bias=False), nn.BatchNorm1d(240), nn.ReLU())
-        # self.up1 = nn.Upsample(8)
+        self.fc1 = nn.Sequential(nn.Linear(zd_dim + zx_dim + zy_dim, 240, bias=False), nn.BatchNorm1d(240), nn.ReLU())
         self.de1 = nn.Sequential(nn.ConvTranspose2d(24, 36, kernel_size=(4, 11), stride=1, padding=0, bias=False),
                                  nn.BatchNorm2d(36), nn.ReLU())
         self.up2 = nn.Upsample([4, 40])
@@ -38,38 +35,34 @@ class px(nn.Module):
         torch.nn.init.xavier_uniform_(self.de3[0].weight)
         self.de3[0].bias.data.zero_()
 
-    def forward(self, zd, zy):
-        # if zx is None:
-        #     zdzxzy = torch.cat((zd, zy), dim=-1)
-        # else:
-        #     zdzxzy = torch.cat((zd, zx, zy), dim=-1)
-        zdzxzy = torch.cat((zd, zy), dim=-1)
+    def forward(self, zd, zx, zy):
+        if zx is None:
+            zdzxzy = torch.cat((zd, zy), dim=-1)
+        else:
+            zdzxzy = torch.cat((zd, zx, zy), dim=-1)
         h = self.fc1(zdzxzy)  # 1024*240
         h = h.view(-1, 24, 1, 10)  # 1024*24*1*10
         h = self.de1(h)  # 1024*36*4*20
         h = self.up2(h)
         h = self.de2(h)
         loc_img = self.de3(h)
-
         return loc_img  # 1024*48*8*52
 
-
+# Encoder de etiquetas de dominio
 class pzd(nn.Module):
     '''
-    Mapping subject label to a distribution in latent space zd
-    params:
-        d_dim: number of source domain
-        zd_dim: size of latent space of subject label
+    Mapeo de la etiqueta de sujeto a una distribución en el espacio latente zd
+        d_dim: número de dominios de origen
+        zd_dim: tamaño del espacio latente de la etiqueta de sujeto
     return:
-        zd_loc: Mean of the latent space distribution
-        zd_scale: Standard deviation of the latent space distribution
+        zd_loc: Media de la distribución del espacio latente
+        zd_scale: Desviación estándar de la distribución del espacio latente
     '''
     def __init__(self, d_dim, x_dim, y_dim, zd_dim, zx_dim, zy_dim):
         super(pzd, self).__init__()
         self.fc1 = nn.Sequential(nn.Linear(d_dim, zd_dim, bias=False), nn.BatchNorm1d(zd_dim), nn.ReLU())
         self.fc21 = nn.Sequential(nn.Linear(zd_dim, zd_dim))
         self.fc22 = nn.Sequential(nn.Linear(zd_dim, zd_dim), nn.Softplus())
-
         torch.nn.init.xavier_uniform_(self.fc1[0].weight)
         torch.nn.init.xavier_uniform_(self.fc21[0].weight)
         self.fc21[0].bias.data.zero_()
@@ -80,26 +73,24 @@ class pzd(nn.Module):
         hidden = self.fc1(d)
         zd_loc = self.fc21(hidden)
         zd_scale = self.fc22(hidden) + 1e-7
-
         return zd_loc, zd_scale
 
-
+# Encoder de etiquetas de gesto
 class pzy(nn.Module):
     '''
-    Mapping gesture label to a distribution in latent space zy
+    Mapeo de la etiqueta de gesto a una distribución en el espacio latente zy
     params:
-        y_dim: number of source domain
-        zy_dim: size of latent space of subject label
+        y_dim: número de clases de gesto
+        zy_dim: tamaño del espacio latente de la etiqueta de gesto
     return:
-        zy_loc: Mean of the latent space distribution
-        zy_scale: Standard deviation of the latent space distribution
+        zy_loc: Media de la distribución del espacio latente
+        zy_scale: Desviación estándar de la distribución del espacio latente
     '''
     def __init__(self, d_dim, x_dim, y_dim, zd_dim, zx_dim, zy_dim):
         super(pzy, self).__init__()
         self.fc1 = nn.Sequential(nn.Linear(y_dim, zy_dim, bias=False), nn.BatchNorm1d(zy_dim), nn.ReLU())
         self.fc21 = nn.Sequential(nn.Linear(zy_dim, zy_dim))
         self.fc22 = nn.Sequential(nn.Linear(zy_dim, zy_dim), nn.Softplus())
-
         torch.nn.init.xavier_uniform_(self.fc1[0].weight)
         torch.nn.init.xavier_uniform_(self.fc21[0].weight)
         self.fc21[0].bias.data.zero_()
@@ -114,29 +105,28 @@ class pzy(nn.Module):
         return zy_loc, zy_scale
 
 
-# Encoders
+#------------------------------ Decoder  ------------------------------#
+
 class qzd(nn.Module):
     '''
-    Subject encoder of SGVA-Wx
+    Subject encoder of SGVA
     params:
-        zd_dim: size of latent space of subject label
+        zd_dim: tamaño del espacio latente de la etiqueta de sujeto
     return:
-        zd_loc: Mean of the latent space distribution
-        zd_scale: Standard deviation of the latent space distribution
+        zd_loc: Media de la distribución del espacio latente
+        zd_scale: Desviación estándar de la distribución del espacio latente
     '''
     def __init__(self, d_dim, x_dim, y_dim, zd_dim, zx_dim, zy_dim):
         super(qzd, self).__init__()
         # 1024*1*8*52
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 12, kernel_size=(5, 13), stride=1, bias=False), nn.BatchNorm2d(12), nn.ReLU(),
-            nn.MaxPool2d((1, 2)),   # 1024*12*4*20
+            nn.MaxPool2d((1, 2)),  # 1024*12*4*20
             nn.Conv2d(12, 24, kernel_size=(4, 11), stride=1, bias=False), nn.BatchNorm2d(24), nn.ReLU(),
-             # 1024*24*1*10
+            # 1024*24*1*10
         )
-
         self.fc11 = nn.Sequential(nn.Linear(240, zd_dim))
         self.fc12 = nn.Sequential(nn.Linear(240, zd_dim), nn.Softplus())
-
         torch.nn.init.xavier_uniform_(self.encoder[0].weight)
         torch.nn.init.xavier_uniform_(self.encoder[4].weight)
         torch.nn.init.xavier_uniform_(self.fc11[0].weight)
@@ -156,7 +146,7 @@ class qzd(nn.Module):
 
 class qzx(nn.Module):
     '''
-    Sample encoder of SGVA-Wx
+    Sample encoder of SGVA
     params:
         zx_dim: size of latent space of subject label
     return:
@@ -168,16 +158,16 @@ class qzx(nn.Module):
 
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 12, kernel_size=(5, 13), stride=1, bias=False), nn.BatchNorm2d(12), nn.ReLU(),
-            nn.MaxPool2d((1, 2)),   # 1024*12*4*20
+            nn.MaxPool2d((1, 2)),  # 1024*12*4*20
             nn.Conv2d(12, 24, kernel_size=(4, 11), stride=1, bias=False), nn.BatchNorm2d(24), nn.ReLU(),
-             # 1024*24*1*10
+            # 1024*24*1*10
         )
 
         self.fc11 = nn.Sequential(nn.Linear(240, zx_dim))
         self.fc12 = nn.Sequential(nn.Linear(240, zx_dim), nn.Softplus())
 
         torch.nn.init.xavier_uniform_(self.encoder[0].weight)
-        torch.nn.init.xavier_uniform_(self.encoder[4].weight)
+        torch.nn.init.xavier_uniform_(self.encoder[4].weight)  # 初始化两个卷积层的权重
         torch.nn.init.xavier_uniform_(self.fc11[0].weight)
         self.fc11[0].bias.data.zero_()
         torch.nn.init.xavier_uniform_(self.fc12[0].weight)
@@ -194,7 +184,7 @@ class qzx(nn.Module):
 
 class qzy(nn.Module):
     '''
-    Gesture encoder of SGVA-Wx
+    Gesture encoder of SGVA-CV
     params:
         zy_dim: size of latent space of subject label
     return:
@@ -206,7 +196,7 @@ class qzy(nn.Module):
 
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 12, kernel_size=(5, 13), stride=1, bias=False), nn.BatchNorm2d(12), nn.ReLU(),
-            nn.MaxPool2d((1, 2)),   # 1024*12*4*20
+            nn.MaxPool2d((1, 2)),  # 1024*12*4*20
             nn.Conv2d(12, 24, kernel_size=(4, 11), stride=1, bias=False), nn.BatchNorm2d(24), nn.ReLU(),
             # 1024*24*1*10
         )
@@ -244,14 +234,14 @@ class qd(nn.Module):
         super(qd, self).__init__()
 
         self.fc1 = nn.Linear(zd_dim, d_dim)
-        self.dense_layer = nn.Sequential(
-            nn.Linear(zd_dim, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(64),
-            nn.Dropout(0.3),
-
-            nn.Linear(64, d_dim)
-        )
+        # self.dense_layer = nn.Sequential(
+        #     nn.Linear(zd_dim, 64),
+        #     nn.BatchNorm1d(64),
+        #     nn.ReLU(64),
+        #     nn.Dropout(0.3),
+        #
+        #     nn.Linear(64, d_dim)
+        # )
 
         torch.nn.init.xavier_uniform_(self.fc1.weight)
         self.fc1.bias.data.zero_()
@@ -260,7 +250,7 @@ class qd(nn.Module):
 
     def forward(self, zd):
         h = F.relu(zd)
-        loc_d = self.dense_layer(h)
+        loc_d = self.fc1(h)
 
         return loc_d
 
@@ -278,14 +268,14 @@ class qy(nn.Module):
         super(qy, self).__init__()
 
         self.fc1 = nn.Linear(zy_dim, y_dim)
-        self.dense_layer = nn.Sequential(
-            nn.Linear(zd_dim, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(64),
-            nn.Dropout(0.3),
-
-            nn.Linear(64, y_dim)
-        )
+        # self.dense_layer = nn.Sequential(
+        #     nn.Linear(zd_dim, 64),
+        #     nn.BatchNorm1d(64),
+        #     nn.ReLU(64),
+        #     nn.Dropout(0.3),
+        #
+        #     nn.Linear(64, y_dim)
+        # )
 
         torch.nn.init.xavier_uniform_(self.fc1.weight)
         self.fc1.bias.data.zero_()
@@ -294,7 +284,7 @@ class qy(nn.Module):
 
     def forward(self, zy):
         h = F.relu(zy)
-        loc_y = self.dense_layer(h)
+        loc_y = self.fc1(h)
 
         return loc_y
 
@@ -312,7 +302,7 @@ class DIVA(nn.Module):
         self.start_zx = self.zd_dim
         self.start_zy = self.zd_dim + self.zx_dim
 
-        self.px = px(self.d_dim, self.x_dim, self.y_dim, self.zd_dim,  self.zy_dim)
+        self.px = px(self.d_dim, self.x_dim, self.y_dim, self.zd_dim, self.zx_dim, self.zy_dim)
         self.pzd = pzd(self.d_dim, self.x_dim, self.y_dim, self.zd_dim, self.zx_dim, self.zy_dim)
         self.pzy = pzy(self.d_dim, self.x_dim, self.y_dim, self.zd_dim, self.zx_dim, self.zy_dim)
 
@@ -339,49 +329,49 @@ class DIVA(nn.Module):
         zd_q, zx_q, zy_q:中间隐变量
         """
         # x -> zd zx zy ->x_recon(inference model -> generative model)
-        # 1 Encode :获取正态分布参数
+        # 1 Encode : getting parameters of Gaussian distribution
         zd_q_loc, zd_q_scale = self.qzd(x)  # 1024*1*8*52 -> 1024*64
-        # if self.zx_dim != 0:
-        #     zx_q_loc, zx_q_scale = self.qzx(x)  # 1024*64
+        if self.zx_dim != 0:
+            zx_q_loc, zx_q_scale = self.qzx(x)  # 1024*64
         zy_q_loc, zy_q_scale = self.qzy(x)  # 1024*64
 
-        # 2 Reparameterization trick  创建正态分布
+        # 2 Reparameterization trick  : Creating Gaussian distribution
         qzd = dist.Normal(zd_q_loc, zd_q_scale)  # 1024*64
         zd_q = qzd.rsample()
-        # if self.zx_dim != 0:
-        #     qzx = dist.Normal(zx_q_loc, zx_q_scale)  # 1024*64
-        #     zx_q = qzx.rsample()
-        # else:
-        #     qzx = None
-        #     zx_q = None
+        if self.zx_dim != 0:
+            qzx = dist.Normal(zx_q_loc, zx_q_scale)  # 1024*64
+            zx_q = qzx.rsample()
+        else:
+            qzx = None
+            zx_q = None
 
         qzy = dist.Normal(zy_q_loc, zy_q_scale)  # 1024*64
         zy_q = qzy.rsample()
 
         # --------------3 Decode----------------#
-        x_recon = self.px(zd_q, zy_q)  # 1024*48*8*52
+        x_recon = self.px(zd_q, zx_q, zy_q)  # 1024*48*8*52
 
         # d,y ->zd,zy -> d_hat,y_hat    (generative model ->inference model)
         zd_p_loc, zd_p_scale = self.pzd(d)
 
-        # if self.zx_dim != 0:
-        #     zx_p_loc, zx_p_scale = torch.zeros(zd_p_loc.size()[0], self.zx_dim).cuda(), \
-        #                            torch.ones(zd_p_loc.size()[0], self.zx_dim).cuda()
+        if self.zx_dim != 0:
+            zx_p_loc, zx_p_scale = torch.zeros(zd_p_loc.size()[0], self.zx_dim).cuda(), \
+                torch.ones(zd_p_loc.size()[0], self.zx_dim).cuda()
         zy_p_loc, zy_p_scale = self.pzy(y)
 
         # Reparameterization trick
         pzd = dist.Normal(zd_p_loc, zd_p_scale)
-        # if self.zx_dim != 0:
-        #     pzx = dist.Normal(zx_p_loc, zx_p_scale)
-        # else:
-        #     pzx = None
+        if self.zx_dim != 0:
+            pzx = dist.Normal(zx_p_loc, zx_p_scale)
+        else:
+            pzx = None
         pzy = dist.Normal(zy_p_loc, zy_p_scale)
 
         # --------Auxiliary losses-----------#
         d_hat = self.qd(zd_q)
         y_hat = self.qy(zy_q)
 
-        return x_recon, d_hat, y_hat, qzd, pzd, zd_q,  qzy, pzy, zy_q
+        return x_recon, d_hat, y_hat, qzd, pzd, zd_q, qzx, pzx, zx_q, qzy, pzy, zy_q
 
     def loss_function(self, d, x, y=None):
         if y is None:  # unsupervised
@@ -404,7 +394,7 @@ class DIVA(nn.Module):
             zd_p_loc, zd_p_scale = self.pzd(d)
             if self.zx_dim != 0:
                 zx_p_loc, zx_p_scale = torch.zeros(zd_p_loc.size()[0], self.zx_dim).cuda(), \
-                                       torch.ones(zd_p_loc.size()[0], self.zx_dim).cuda()
+                    torch.ones(zd_p_loc.size()[0], self.zx_dim).cuda()
 
             pzd = dist.Normal(zd_p_loc, zd_p_scale)
 
@@ -462,30 +452,30 @@ class DIVA(nn.Module):
             marginal_prior_y_minus_qy = torch.sum(prob_qy * prior_y_minus_qy)
 
             return CE_x \
-                   - self.beta_d * zd_p_minus_zd_q \
-                   - self.beta_x * KL_zx \
-                   - self.beta_y * marginal_zy_p_minus_zy_q \
-                   - marginal_prior_y_minus_qy \
-                   + self.aux_loss_multiplier_d * CE_d
+                - self.beta_d * zd_p_minus_zd_q \
+                - self.beta_x * KL_zx \
+                - self.beta_y * marginal_zy_p_minus_zy_q \
+                - marginal_prior_y_minus_qy \
+                + self.aux_loss_multiplier_d * CE_d
 
         else:  # supervised
-            # 重建损失
-            x_recon, d_hat, y_hat, qzd, pzd, zd_q, qzy, pzy, zy_q = self.forward(d, x, y)
+            # reconstruction loss
+            x_recon, d_hat, y_hat, qzd, pzd, zd_q, qzx, pzx, zx_q, qzy, pzy, zy_q = self.forward(d, x, y)
             x_recon = x_recon.permute(0, 2, 3, 1)
             x_recon = x_recon.reshape(-1, 48)
             # x_recon = x_recon.view(-1, 48)
             x_target = (x.permute(0, 1, 3, 2).reshape(-1)).long()
             CE_x = F.cross_entropy(x_recon, x_target, reduction='sum')
 
-            # 近似损失
+            # KL Divergence
             zd_p_minus_zd_q = torch.sum(pzd.log_prob(zd_q) - qzd.log_prob(zd_q))
-            # if self.zx_dim != 0:
-            #     KL_zx = torch.sum(pzx.log_prob(zx_q) - qzx.log_prob(zx_q))  # -KL
-            # else:
-            #     KL_zx = 0
+            if self.zx_dim != 0:
+                KL_zx = torch.sum(pzx.log_prob(zx_q) - qzx.log_prob(zx_q))  # -KL
+            else:
+                KL_zx = 0
             zy_p_minus_zy_q = torch.sum(pzy.log_prob(zy_q) - qzy.log_prob(zy_q))
 
-            # 辅助分类器的分类损失
+            # classification loss of subject and gesture
             _, d_target = d.max(dim=1)
             CE_d = F.cross_entropy(d_hat, d_target, reduction='sum')
 
@@ -494,10 +484,11 @@ class DIVA(nn.Module):
 
             return CE_x \
                    - self.beta_d * zd_p_minus_zd_q \
+                   - self.beta_x * KL_zx \
                    - self.beta_y * zy_p_minus_zy_q \
                    + self.aux_loss_multiplier_d * CE_d \
                    + self.aux_loss_multiplier_y * CE_y, \
-                   CE_y, zd_q, zy_q, d_target, y_target
+                CE_y, zd_q, zy_q, zx_q, d_target, y_target
 
     def classifier(self, x):
         """

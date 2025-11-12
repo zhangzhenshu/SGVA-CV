@@ -18,7 +18,7 @@ class semgdata_load(data_utils.Dataset):
         self.transform = transform
         self.train = train
         self.download = download
-
+        # cargar datos de entrenamiento o prueba
         if self.train:
             self.train_data, self.train_labels, self.train_domain = self._get_data()
         else:
@@ -71,6 +71,7 @@ class semgdata_load(data_utils.Dataset):
 
             return train_data.unsqueeze(1), train_label, train_domains  # (46475,1,8,52) (46475,7)  (46475,7)
 
+        # Cargar datos de prueba
         else:
             train_data_label_dict = np.load("./../dataset/8subs_6motions_35repeats_sEMG.npy",
                                        encoding="bytes", allow_pickle=True).item()
@@ -82,26 +83,26 @@ class semgdata_load(data_utils.Dataset):
             # original_train_label = original_train_label.tolist()[self.list_test_domain[0]]
             train_data = torch.tensor(np.array(original_train_data, dtype=np.float32))
             train_label = torch.tensor(original_train_label).long()
-
-            # Create domain labels
+            # Crear etiquetas de dominio
             train_domains = torch.zeros(len(train_label)).long()
-
-            # Convert to onehot
-            d = torch.eye(7)  # 创建对角矩阵
-            train_domains = d[train_domains]  # train_domains中的每一个元素由该元素的原值（表示域）对应对角矩阵中的行向量代替
-
-            # Convert to onehot
+            # Convertir a onehot
+            d = torch.eye(7)  # Crear matriz diagonal
+            train_domains = d[train_domains]  # Cada elemento en train_domains es reemplazado por la fila correspondiente en
+            # la matriz diagonal según su valor original (que representa el dominio)
+            # Convertir a onehot
             y = torch.eye(6)
             train_label = y[train_label]
-
+            # Retornar datos de prueba
             return train_data.unsqueeze(1), train_label, train_domains
 
+    # Obtener la longitud del conjunto de datos
     def __len__(self):
         if self.train:
             return len(self.train_labels)
         else:
             return len(self.test_labels)
 
+    # Obtener un elemento del conjunto de datos
     def __getitem__(self, index):
         if self.train:
             x = self.train_data[index]
@@ -114,6 +115,4 @@ class semgdata_load(data_utils.Dataset):
 
         if self.transform is not None:
             x = self.transform(x)
-
         return x, y, d
-

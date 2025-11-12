@@ -1,9 +1,7 @@
-import os
 import time
 import numpy as np
 import pandas as pd
 from scipy import signal
-
 
 
 #--------------------- Procesamiento de datos de archivos txt a matrices numpy ---------------------#
@@ -16,9 +14,6 @@ def txt2array(txt_path):
     table_file = pd.read_table(txt_path, sep=' ', header=None)
     txt_file = table_file.iloc[:, :]
     txt_array = txt_file.values
-
-    return txt_array
-
     return txt_array
 
 # leer txt 
@@ -30,7 +25,6 @@ def txt2array0(txt_path):
     table_file = pd.read_table(txt_path, header=None)
     txt_file = table_file.iloc[:, :]
     txt_array = txt_file.values
-
     return txt_array
 
 # leer txt 
@@ -40,10 +34,8 @@ def txt2array_revise(txt_path):
     :return:            matriz preprocesada de dimensión 2 <class 'np.ndarray'> del archivo txt de entrada
     """
     table_file = pd.read_table(txt_path, header=None)
-    # txt_file = table_file.iloc[:, :] #
     txt_file = table_file.iloc[:, :-1]
     txt_array = txt_file.values
-
     return txt_array
 
 
